@@ -2,7 +2,6 @@ import logging
 import warnings
 
 import numpy as np
-from scipy.interpolate import interp1d  # type: ignore [import-untyped]
 from scipy.signal import fftconvolve  # type: ignore [import-untyped]
 from scipy.special import wofz  # type: ignore [import-untyped]
 
@@ -152,8 +151,8 @@ def match_spectra(sim_spec: Spectrum, exp_spec: Spectrum) -> tuple[Spectrum, Spe
             [sim_spec.x, [max(sim_spec.x) + 1e-3], [max(exp_spec.x)]]
         )
         sim_spec.y = np.concatenate([sim_spec.y, [0], [0]])
-    interp = interp1d(sim_spec.x, sim_spec.y)
-    y_interp = interp(exp_spec.x)
+
+    y_interp = np.interp(exp_spec.x, sim_spec.x, sim_spec.y)
 
     return (Spectrum(x=exp_spec.x, y=y_interp), exp_spec)
 

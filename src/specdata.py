@@ -1,20 +1,21 @@
 import pathlib
 import sqlite3 as sqlite
-from typing import TYPE_CHECKING, Any, Literal, cast
 import warnings
 from copy import copy
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy
 import pandas as pd
-from scipy.constants import physical_constants
 
 import spectrum
+from data_models.enums import SpectralSystemEnum
+from data_models.models import SimulatedSpectrumParams, SpectralSystemParams
 
 DATA_DIR = pathlib.Path(__file__).parent / "data"
 
 
-kB = physical_constants["Boltzmann constant in inverse meters per kelvin"][0]
-kB /= 100  # inverse cm
+BOLTZMANN_CONSTANT = 69.50348004861274  # 1/(mK)
+kB = BOLTZMANN_CONSTANT / 100  # inverse cm
 
 
 WAV_RESERVE = 2
@@ -94,10 +95,9 @@ class SpecDB:
         Tvib: float,
         wmin: float,
         wmax: float,
-        as_spectrum: bool = True,
         y_scaling: Literal["intensity", "photon_flux"] = "photon_flux",
         refractive_index: Literal["vacuum", "air"] = "air",
-    ) -> spectrum.Spectrum | numpy.ndarray:
+    ) -> spectrum.Spectrum:
         """
         kwargs:
            wavelength: either 'vacuum' or 'air', returns the wavelength in vacuum or air (default is 'air')
@@ -137,11 +137,7 @@ class SpecDB:
 
         if y_scaling == "intensity":
             self.table["y"] *= self.table["wavenumber"]
-        if as_spectrum:
-            self.spec = spectrum.Spectrum(x=self.table[wav], y=self.table["y"])
-        else:
-            self.spec = numpy.array([self.table[wav], self.table["y"]]).T
-
+        self.spec = spectrum.Spectrum(x=self.table[wav], y=self.table["y"])
         return copy(self.spec)
 
     def get_table_from_DB(
@@ -236,40 +232,74 @@ class SpecDB:
 
 
 def generate_spectrum(
-    params,  # TODO: what type is this?
+    simspec_params: SimulatedSpectrumParams,
     step: float,
     wmin: float,
     wmax: float,
-    sims: dict = {},
+    simulations: dict[SpectralSystemEnum, SpecDB],
     points_per_nm: int = 1000,
 ) -> spectrum.Spectrum:
 
-    spectra = []
-    for specie in params.info["species"]:
-        temp_spec = sims[specie].get_spectrum(
-            params[specie + "_Trot"].value,
-            params[specie + "_Tvib"].value,
-            wmin=wmin,
-            wmax=wmax,
-            as_spectrum=False,
-        )
-        temp_spec[:, 1] *= params[specie + "_intensity"].value
-        spectra.append(temp_spec)
-    if len(spectra) == 0:
+    if (len(simulations) == 0) or (len(simspec_params.species_params) == 0):
         warnings.warn("No simulation files given, returning empty spectrum!", Warning)
         return spectrum.Spectrum(x=[], y=[])
 
-    spec = numpy.concatenate(spectra)
-    spec = spec[spec[:, 0].argsort()]
-    spec = spectrum.Spectrum(x=spec[:, 0], y=spec[:, 1])
+    spectra_xs = []
+    spectra_ys = []
+    for species, species_params in simspec_params.species_params.items():
+        sim = simulations[species]
+        temp_spec = sim.get_spectrum(
+            Trot=species_params.Trot,
+            Tvib=species_params.Tvib,
+            wmin=wmin,
+            wmax=wmax,
+        )
+        temp_spec.y *= species_params.intensity
+        spectra_xs.append(temp_spec.x)
+        spectra_ys.append(temp_spec.y)
+
+    spec_x = numpy.concatenate(spectra_xs)
+    spec_y = numpy.concatenate(spectra_ys)
+    spec_y = spec_y[spec_x.argsort()]
+    spec_x = numpy.sort(spec_x)
+    spec = spectrum.Spectrum(x=spec_x, y=spec_y)
     spec.refine_mesh(points_per_nm=points_per_nm)
     spec.convolve_with_slit_function(
-        gauss=params["slitf_gauss"].value,
-        lorentz=params["slitf_lorentz"].value,
+        gauss=simspec_params.slitf_gauss,
+        lorentz=simspec_params.slitf_lorentz,
         instrumental_step=step,
     )
     if len(spec.y) > 0:
-        spec.y += params["baseline"].value
-        spec.y += params["baseline_slope"].value * (spec.x - wmin)
+        spec.y += simspec_params.baseline
+        spec.y += simspec_params.baseline_slope * (spec.x - wmin)
 
     return spec
+
+
+if __name__ == "__main__":
+    params = SimulatedSpectrumParams(
+        slitf_gauss=0.0396,
+        slitf_lorentz=0.0138,
+        baseline=0.55,
+        baseline_slope=0,
+        species_params={
+            SpectralSystemEnum.OHAX: SpectralSystemParams(
+                Tvib=3000,
+                Trot=3000,
+                intensity=1,
+            )
+        },
+    )
+
+    test_spectrum = generate_spectrum(
+        simspec_params=params,
+        step=0.0318,
+        wmin=300,
+        wmax=320,
+        simulations={
+            "OHAX": SpecDB("OHAX.db"),
+        },
+    )
+    with open("test_spectrum.txt", "w") as f:
+        for x, y in zip(test_spectrum.x, test_spectrum.y):
+            f.write(f"{x} {y}\n")
