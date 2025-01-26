@@ -274,32 +274,3 @@ def generate_spectrum(
         spec.y += simspec_params.baseline_slope * (spec.x - wmin)
 
     return spec
-
-
-if __name__ == "__main__":
-    params = SimulatedSpectrumParams(
-        slitf_gauss=0.0396,
-        slitf_lorentz=0.0138,
-        baseline=0.55,
-        baseline_slope=0,
-        species_params={
-            SpectralSystemEnum.OHAX: SpectralSystemParams(
-                Tvib=3000,
-                Trot=3000,
-                intensity=1,
-            )
-        },
-    )
-
-    test_spectrum = generate_spectrum(
-        simspec_params=params,
-        step=0.0318,
-        wmin=300,
-        wmax=320,
-        simulations={
-            "OHAX": SpecDB("OHAX.db"),
-        },
-    )
-    with open("test_spectrum.txt", "w") as f:
-        for x, y in zip(test_spectrum.x, test_spectrum.y):
-            f.write(f"{x} {y}\n")
